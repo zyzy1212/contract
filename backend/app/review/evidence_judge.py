@@ -77,19 +77,50 @@ class EvidenceJudge(Protocol):
 _JUDGE_SYSTEM_PROMPT = (
     "你是证据充分性判断 Agent。只输出结构化判断，不生成最终审核意见。\n"
     "判断候选证据能否支撑合同条款审核；证据不足时给出缺失要点和下一轮检索词。\n"
-    "只能选择用户给出的证据 ID；拒绝的证据必须给出原因。\n"
+    "只能选择用户给出的证据编号（如 E1、E2）；拒绝的证据必须给出原因。\n"
     "sufficient 必须是 JSON 布尔值；missing_points、follow_up_queries、"
     "usable_evidence_ids 必须是字符串数组；rejected_evidence 必须是对象。\n"
     "不输出最终法律建议。必须使用 JSON 输出。"
 )
 
 
+def _evidence_aliases(
+    candidates: Sequence[EvidenceCandidate],
+) -> dict[str, str]:
+    return {
+        f"E{index}": item.chunk_id
+        for index, item in enumerate(candidates, start=1)
+    }
+
+
+def _resolve_decision_ids(
+    decision: EvidenceDecision,
+    aliases: dict[str, str],
+) -> EvidenceDecision:
+    if not aliases:
+        return decision
+    by_alias = {alias: chunk_id for alias, chunk_id in aliases.items()}
+    usable = [
+        by_alias.get(evidence_id, evidence_id)
+        for evidence_id in decision.usable_evidence_ids
+    ]
+    rejected = {
+        by_alias.get(evidence_id, evidence_id): reason
+        for evidence_id, reason in decision.rejected_evidence.items()
+    }
+    return decision.model_copy(
+        update={"usable_evidence_ids": usable, "rejected_evidence": rejected}
+    )
+
+
 def _judge_request(
     query: str,
     candidates: Sequence[EvidenceCandidate],
 ) -> str:
+    aliases = _evidence_aliases(candidates)
     candidate_block = "\n".join(
-        f"[{item.chunk_id}] {item.text}" for item in candidates
+        f"[{alias}] {item.text}"
+        for alias, item in zip(aliases, candidates, strict=True)
     )
     return (
         "待审核条款检索词：\n"
@@ -119,6 +150,7 @@ class DeepSeekEvidenceJudge:
             {"role": "system", "content": _JUDGE_SYSTEM_PROMPT},
             {"role": "user", "content": _judge_request(query, candidates)},
         ]
-        return await self._client.complete_json(
+        decision = await self._client.complete_json(
             self._model, messages, EvidenceDecision
         )
+        return _resolve_decision_ids(decision, _evidence_aliases(candidates))

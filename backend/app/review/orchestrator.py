@@ -29,8 +29,56 @@ _DATE_PATTERNS = (
 _PERCENT_PATTERN = re.compile(r"\d+(?:\.\d+)?\s*%")
 _NUMBER_PATTERN = re.compile(r"\d+(?:\.\d+)?")
 _LIST_MARKER_FOLLOWERS = ".、)]）"
+_CN_DIGITS = {
+    "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3,
+    "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+}
+_CN_PLACE_UNITS = {"十": 10, "百": 100, "千": 1000}
+_CN_SECTION_UNITS = {"万": 10_000, "亿": 100_000_000}
+_CN_NUMERAL_RE = re.compile(r"[零〇一二三四五六七八九十百千万两]+")
 MAX_EXPANDED_QUERIES = 8
 MAX_EXPANDED_CANDIDATES = 20
+
+
+def _chinese_numeral_to_int(value: str) -> int | None:
+    if not value:
+        return None
+    if not any(char in "十百千万亿" for char in value):
+        digits = "".join(str(_CN_DIGITS[char]) for char in value)
+        return int(digits) if digits else None
+    total = 0
+    section = 0
+    number = 0
+    for char in value:
+        if char in _CN_DIGITS:
+            number = _CN_DIGITS[char]
+        elif char in _CN_PLACE_UNITS:
+            section += (number or 1) * _CN_PLACE_UNITS[char]
+            number = 0
+        elif char in _CN_SECTION_UNITS:
+            section = (section + number) * _CN_SECTION_UNITS[char]
+            total += section
+            section = 0
+            number = 0
+        else:
+            return None
+    return total + section + number
+
+
+def _normalize_cn_numbers(text: str) -> str:
+    def replace(match: re.Match) -> str:
+        value = _chinese_numeral_to_int(match.group(0))
+        return str(value) if value is not None else match.group(0)
+
+    return _CN_NUMERAL_RE.sub(replace, text)
+
+
+def _grounding_value_matches(evidence_text: str, value: str) -> bool:
+    if re.fullmatch(r"\d+(?:\.\d+)?", value):
+        return re.search(
+            rf"(?<!\d){re.escape(value)}(?!\d)", evidence_text
+        ) is not None
+    return value in evidence_text
 
 
 def _is_list_marker(text: str, match: re.Match) -> bool:
@@ -82,12 +130,15 @@ def validate_grounding(
         raise ValueError(f"unknown evidence ids: {sorted(unknown)}")
     if evidence_by_id is None:
         return
-    evidence_text = "\n".join(
-        evidence_by_id.get(evidence_id, "")
-        for evidence_id in finding.evidence_ids
-    ).replace(" ", "")
+    evidence_text = _normalize_cn_numbers(
+        "\n".join(
+            evidence_by_id.get(evidence_id, "")
+            for evidence_id in finding.evidence_ids
+        ).replace(" ", "")
+    )
     for value in _grounding_values(finding):
-        if value.replace(" ", "") not in evidence_text:
+        normalized_value = _normalize_cn_numbers(value.replace(" ", ""))
+        if not _grounding_value_matches(evidence_text, normalized_value):
             raise ValueError(f"finding contains unsupported value: {value}")
 
 

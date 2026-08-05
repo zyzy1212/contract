@@ -35,13 +35,42 @@ class FindingGenerator(Protocol):
 
 _GENERATOR_SYSTEM_PROMPT = (
     "你是合同审核结果生成 Agent。只依据用户提供的合同条款和可用证据输出结构化审核意见。\n"
-    "每项意见必须引用给出的证据 ID，只能使用用户列出的证据 ID。\n"
+    "每项意见必须引用给出的证据编号（如 E1、E2），只能使用用户列出的证据编号。\n"
     "risk_level 只能是 high、medium、low 三选一，禁止使用其他值。\n"
     "禁止在 title、problem、reason、suggestion、proposed_clause 中输出证据原文不存在的数字或条款编号。\n"
     "不得引入证据中没有的金额、比例、期限、主体义务或法律结论。\n"
     "不输出最终法律建议，不把模型错误当作普通文本返回。\n"
     "必须使用 JSON 输出。"
 )
+
+
+def _evidence_aliases(
+    evidence: Sequence[EvidenceCandidate],
+) -> dict[str, str]:
+    return {
+        f"E{index}": item.chunk_id
+        for index, item in enumerate(evidence, start=1)
+    }
+
+
+def _resolve_draft_ids(
+    draft: DraftClauseReview,
+    aliases: dict[str, str],
+) -> DraftClauseReview:
+    if not aliases:
+        return draft
+    findings = [
+        finding.model_copy(
+            update={
+                "evidence_ids": [
+                    aliases.get(evidence_id, evidence_id)
+                    for evidence_id in finding.evidence_ids
+                ]
+            }
+        )
+        for finding in draft.findings
+    ]
+    return draft.model_copy(update={"findings": findings})
 
 
 def _render_clause(clause: Mapping[str, Any] | str) -> str:
@@ -51,7 +80,10 @@ def _render_clause(clause: Mapping[str, Any] | str) -> str:
 
 
 def _evidence_block(evidence: Sequence[EvidenceCandidate]) -> str:
-    return "\n".join(f"[{item.chunk_id}] {item.text}" for item in evidence)
+    return "\n".join(
+        f"[E{index}] {item.text}"
+        for index, item in enumerate(evidence, start=1)
+    )
 
 
 def _generation_request(
@@ -109,9 +141,10 @@ class DeepSeekFindingGenerator:
                 "content": _generation_request(clause, evidence),
             },
         ]
-        return await self._client.complete_json(
+        draft = await self._client.complete_json(
             self._model, messages, DraftClauseReview
         )
+        return _resolve_draft_ids(draft, _evidence_aliases(evidence))
 
     async def revise(
         self,
@@ -129,6 +162,7 @@ class DeepSeekFindingGenerator:
                 ),
             },
         ]
-        return await self._client.complete_json(
+        revised = await self._client.complete_json(
             self._model, messages, DraftClauseReview
         )
+        return _resolve_draft_ids(revised, _evidence_aliases(evidence))
