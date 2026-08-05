@@ -40,6 +40,52 @@ _NUMBERED_CLAUSE_HEADING_RE = re.compile(
     r")"
 )
 
+_SECTION_TITLE_SUFFIX_RE = re.compile(
+    r"(?:"
+    r"基本情况|主要内容|概述|简介|介绍|情况|内容|背景|意义|目的|依据|"
+    r"范围|定义|原则|要求|安排|措施|方式|程序|条件|标准|约定|事项|"
+    r"风险|提示|影响|其他|附则|附件|文件"
+    r")$"
+)
+
+_FOOTER_LINE_RE = re.compile(
+    r"^(?:"
+    r"特此公告[。．\.]?"
+    r"|特此通知[。．\.]?"
+    r"|董\s*事\s*会"
+    r"|监\s*事\s*会"
+    r"|《[^《》]{1,80}》"
+    r"|[\u4e00-\u9fff]{2,20}(?:股份有限公司|有限责任公司|集团有限公司|有限公司)"
+    r"|[〇零一二三四五六七八九十百\d]+年\d{1,2}月\d{1,2}日"
+    r"|[二〇○两〇一二三四五六七八九十百\d]+年[〇零一二三四五六七八九十百\d]+月[〇零一二三四五六七八九十百\d]+日"
+    r")$"
+)
+
+
+def _is_closing_footer(text: str) -> bool:
+    """True for standalone document closing lines such as 特此公告 or a date."""
+    return bool(_FOOTER_LINE_RE.fullmatch(text.strip()))
+
+
+def _is_pure_section_title(text: str) -> bool:
+    """True for short numbered headings such as 一、交易对方基本情况.
+
+    Announcements and contracts commonly structure sections with Chinese
+    numeral headings.  A heading that only names a section (no clause body,
+    no colon, short title) should be treated as a boundary, not a clause.
+    """
+    stripped = text.strip()
+    if not _NUMBERED_CLAUSE_HEADING_RE.match(stripped):
+        return False
+    if any(mark in stripped for mark in "：:，,。！？；;（）()"):
+        return False
+    body = _NUMBERED_CLAUSE_HEADING_RE.sub("", stripped, count=1).strip()
+    return (
+        bool(body)
+        and len(body) <= 25
+        and bool(_SECTION_TITLE_SUFFIX_RE.search(body))
+    )
+
 
 @dataclass(frozen=True)
 class ClauseRecord:
@@ -158,7 +204,9 @@ def _split_numbered_clauses(
     usable = [
         block
         for block in blocks
-        if block.text.strip() and not is_page_number_like(block.text)
+        if block.text.strip()
+        and not is_page_number_like(block.text)
+        and not _is_closing_footer(block.text)
     ]
     has_heading = any(
         _NUMBERED_CLAUSE_HEADING_RE.match(block.text.strip())
@@ -174,10 +222,22 @@ def _split_numbered_clauses(
             for index, block in enumerate(usable, start=1)
         ]
 
+    first_section_title = next(
+        (
+            index
+            for index, block in enumerate(usable)
+            if _is_pure_section_title(block.text)
+        ),
+        None,
+    )
+    start = first_section_title if first_section_title is not None else 0
     clauses: list[ClauseRecord] = []
     pending: list[ParsedBlock] = []
-    for block in usable:
+    for block in usable[start:]:
         if block.block_type == "heading":
+            _append_clause(clauses, pending)
+            continue
+        if _is_pure_section_title(block.text):
             _append_clause(clauses, pending)
             continue
         if _NUMBERED_CLAUSE_HEADING_RE.match(block.text.strip()):
