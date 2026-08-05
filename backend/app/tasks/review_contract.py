@@ -5,6 +5,7 @@ import inspect
 import json
 import re
 import tempfile
+import threading
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -24,6 +25,11 @@ from app.retrieval.models import EvidenceCandidate
 from app.review.schemas import GeneratedFinding
 from app.storage.objects import LocalObjectStore, ObjectStore
 from app.tasks.celery_app import celery_app
+
+
+_SHARED_EMBEDDER_MODEL = None
+_SHARED_EMBEDDER_KEY: tuple[str, str] | None = None
+_SHARED_EMBEDDER_LOCK = threading.Lock()
 
 
 TERMINAL_CLAUSE_STATUSES = frozenset(
@@ -654,6 +660,7 @@ async def run_review_job(
     clause_reviewer = clause_reviewer or build_default_clause_reviewer()
     contract_parser = contract_parser or _parse_contract
     actor = Actor(user_id="system", tenant_id=tenant_id, role="admin")
+    await SentenceTransformerQueryEmbedder().warm()
     job = await repository.load_job(actor, job_id)
     if job.status in {"complete", "failed", "partial"}:
         return
@@ -740,12 +747,27 @@ class SentenceTransformerQueryEmbedder:
         self.precision = (
             precision if precision is not None else settings.embedding_precision
         )
-        self._model = None
+
+    def _load_shared_model(self):
+        global _SHARED_EMBEDDER_MODEL, _SHARED_EMBEDDER_KEY
+        key = (self.model_name, self.precision)
+        if _SHARED_EMBEDDER_KEY == key:
+            return _SHARED_EMBEDDER_MODEL
+        with _SHARED_EMBEDDER_LOCK:
+            if _SHARED_EMBEDDER_KEY != key:
+                _SHARED_EMBEDDER_MODEL = load_sentence_transformer(
+                    self.model_name, self.precision
+                )
+                _SHARED_EMBEDDER_KEY = key
+        return _SHARED_EMBEDDER_MODEL
+
+    async def warm(self) -> None:
+        """Load the shared embedding model outside the retrieval timeout budget."""
+        await asyncio.to_thread(self._load_shared_model)
 
     async def embed_query(self, query: str) -> Sequence[float]:
-        if self._model is None:
-            self._model = load_sentence_transformer(self.model_name, self.precision)
-        vector = self._model.encode(query, normalize_embeddings=True)
+        model = await asyncio.to_thread(self._load_shared_model)
+        vector = model.encode(query, normalize_embeddings=True)
         return [float(value) for value in vector]
 
 
