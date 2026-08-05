@@ -94,6 +94,22 @@ def _validated_tenant(actor: Actor, requested_tenant_id: str | None) -> str:
     return require_tenant(actor, requested_tenant_id)
 
 
+def _keyword_search_terms(keyword_search_text: str) -> list[str]:
+    """Prefer whole words over the single-character fallback tokens.
+
+    jieba emits both ``合同`` and single-character tokens such as ``合``、``同``.
+    Querying tsquery with every single character matches unrelated chunks (for
+    example ``人民代表大会`` contains 人/民), so drop the one-character noise
+    unless it is all we have.
+    """
+    terms = re.findall(
+        r"[A-Za-z0-9_]+|[\u3400-\u9fff]+",
+        keyword_search_text.lower(),
+    )
+    preferred = [term for term in terms if len(term) >= 2]
+    return preferred or terms
+
+
 def _document_record(row: Any) -> KnowledgeDocumentRecord:
     return KnowledgeDocumentRecord(
         id=str(row["id"]),
@@ -240,7 +256,7 @@ class KnowledgeRepository:
         except (ValueError, AttributeError, TypeError) as exc:
             raise InputValidationError("excluded chunk IDs must be valid UUIDs") from exc
         exclusions = list(dict.fromkeys(excluded_chunk_ids))
-        keyword_terms = re.findall(r"[A-Za-z0-9_]+|[\u3400-\u9fff]+", keyword_search_text.lower())
+        keyword_terms = _keyword_search_terms(keyword_search_text)
         if not keyword_terms:
             raise InputValidationError("keyword search text has no searchable terms")
 
