@@ -852,6 +852,7 @@ def build_default_clause_reviewer() -> ClauseReviewer:
     retriever = HybridRetriever(
         repository=repository,
         embedder=SentenceTransformerQueryEmbedder(),
+        top_k=20,
     )
     return ClauseReviewerPipeline(
         retriever,

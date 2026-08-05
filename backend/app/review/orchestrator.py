@@ -138,6 +138,8 @@ def validate_grounding(
     )
     for value in _grounding_values(finding):
         normalized_value = _normalize_cn_numbers(value.replace(" ", ""))
+        if re.fullmatch(r"\d", normalized_value):
+            continue
         if not _grounding_value_matches(evidence_text, normalized_value):
             raise ValueError(f"finding contains unsupported value: {value}")
 

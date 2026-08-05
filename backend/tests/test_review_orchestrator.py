@@ -49,3 +49,12 @@ def test_validate_grounding_rejects_unsupported_number() -> None:
             {"evidence-1"},
             evidence_by_id={"evidence-1": "民法典规定了违约责任，未涉及金额。"},
         )
+
+
+def test_validate_grounding_skips_single_digit_values() -> None:
+    finding = _finding(reason="见第4项建议")
+    validate_grounding(
+        finding,
+        {"evidence-1"},
+        evidence_by_id={"evidence-1": "民法典规定了违约责任。"},
+    )

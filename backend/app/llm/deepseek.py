@@ -106,7 +106,7 @@ class DeepSeekClient:
                     model=model,
                     messages=[dict(item) for item in messages],
                     response_format={"type": "json_object"},
-                    temperature=temperature,
+                    temperature=0.0 if temperature is None else temperature,
                     max_tokens=max_tokens,
                 )
             except (
