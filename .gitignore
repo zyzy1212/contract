@@ -1,0 +1,14 @@
+.superpowers/
+.worktrees/
+brainstorm-server.out
+brainstorm-server.err
+.env
+__pycache__/
+.pytest_cache/
+.pytest-tmp/
+.venv/
+node_modules/
+dist/
+*.tsbuildinfo
+*.egg-info/
+logs/
