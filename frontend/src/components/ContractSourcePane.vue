@@ -11,6 +11,7 @@ const props = defineProps<{
   clauses: SourceClause[];
   highlightedClauseId: string;
   flaggedClauseIds?: string[];
+  insufficientClauseIds?: string[];
   jobId?: string;
 }>();
 
@@ -24,6 +25,10 @@ const sourceScroll = ref<HTMLElement | null>(null);
 
 function isFlagged(clause: SourceClause): boolean {
   return (props.flaggedClauseIds ?? []).includes(clause.id);
+}
+
+function isInsufficient(clause: SourceClause): boolean {
+  return (props.insufficientClauseIds ?? []).includes(clause.id);
 }
 
 function isPdfClause(clause: SourceClause): boolean {
@@ -172,6 +177,7 @@ onUnmounted(revokeFileUrl);
         class="clause"
         :class="{
           'has-finding': isFlagged(clause),
+          'is-insufficient': isInsufficient(clause),
           'is-highlighted': clause.id === highlightedClauseId,
         }"
         :data-clause-id="clause.id"
@@ -185,6 +191,9 @@ onUnmounted(revokeFileUrl);
           </span>
           <span v-if="clause.paragraph_index != null" class="clause-paragraph">
             第 {{ clause.paragraph_index }} 段
+          </span>
+          <span v-if="isInsufficient(clause)" class="clause-insufficient">
+            依据不足
           </span>
         </header>
         <PdfSourceViewer
@@ -321,6 +330,12 @@ onUnmounted(revokeFileUrl);
   background: #fffbeb;
 }
 
+.clause.is-insufficient {
+  border-color: #f59e0b;
+  border-style: dashed;
+  background: #fffbeb;
+}
+
 .clause.is-highlighted {
   border-color: #0ea5e9;
   background: #f0f9ff;
@@ -342,5 +357,10 @@ onUnmounted(revokeFileUrl);
 .clause-page,
 .clause-paragraph {
   color: #64748b;
+}
+
+.clause-insufficient {
+  color: #92400e;
+  font-weight: 700;
 }
 </style>

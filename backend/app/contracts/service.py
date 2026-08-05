@@ -287,6 +287,7 @@ class ContractService:
                 {
                     "id": str(item["clause_id"]),
                     "text": str(item["clause_text"]),
+                    "status": str(item["status"]),
                     **_clause_locator(item["locator"]),
                 }
                 for item in source_rows

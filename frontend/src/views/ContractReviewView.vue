@@ -60,6 +60,16 @@ const flaggedClauseIds = computed<string[]>(() => {
   return Array.from(ids);
 });
 
+const insufficientClauseIds = computed<string[]>(() =>
+  (review.value?.source_clauses ?? [])
+    .filter((clause) => clause.status === "insufficient")
+    .map((clause) => clause.id),
+);
+
+const insufficientClauseCount = computed<number>(
+  () => review.value?.insufficient_clause_count ?? 0,
+);
+
 const clauseLabels = computed<Record<string, string>>(() => {
   const labels: Record<string, string> = {};
   for (const clause of review.value?.source_clauses ?? []) {
@@ -93,11 +103,14 @@ const statusLabel = computed(() => {
 const findingEmptyReason = computed(() => {
   if (!review.value) return "";
   if (!["complete", "partial", "failed"].includes(review.value.status)) return "";
+  if (activeRisk.value === "insufficient") {
+    return insufficientClauseCount.value > 0
+      ? "依据不足的条款未生成风险发现，见左侧“依据不足”标注。"
+      : "";
+  }
   if (review.value.findings.length > 0) return "";
-  const insufficient = review.value.insufficient_clause_count ?? 0;
-  return insufficient > 0
-    ? `${insufficient} 个条款因知识库依据不足未生成风险发现，可补充相关法规后重新审核。`
-    : "知识库中未找到足够依据，系统不会发布未经验证的发现。";
+  if (insufficientClauseCount.value > 0) return "";
+  return "知识库中未找到足够依据，系统不会发布未经验证的发现。";
 });
 
 async function loadHistory() {
@@ -438,11 +451,24 @@ function selectFinding(finding: Finding) {
             </label>
           </div>
 
+          <div
+            v-if="
+              insufficientClauseCount > 0 &&
+              ['complete', 'partial', 'failed'].includes(review.status)
+            "
+            class="notice is-warning"
+            data-insufficient-banner
+          >
+            {{ insufficientClauseCount }}
+            个条款因知识库依据不足未生成风险发现，可补充相关法规后重新审核。
+          </div>
+
           <div class="review-grid">
             <ContractSourcePane
               :clauses="review.source_clauses"
               :highlighted-clause-id="selectedFinding?.clause_id ?? ''"
               :flagged-clause-ids="flaggedClauseIds"
+              :insufficient-clause-ids="insufficientClauseIds"
               :job-id="review.id"
             />
             <FindingPanel
@@ -648,6 +674,12 @@ function selectFinding(finding: Finding) {
   border-color: #fecaca;
   background: #fef2f2;
   color: #b91c1c;
+}
+
+.notice.is-warning {
+  border-color: #fcd34d;
+  background: #fffbeb;
+  color: #92400e;
 }
 
 .progress-strip {

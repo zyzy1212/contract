@@ -40,6 +40,7 @@ export interface Finding {
 export interface SourceClause {
   id: string
   text: string
+  status?: string
   article_number?: string
   paragraph_index?: number
   page_start?: number
