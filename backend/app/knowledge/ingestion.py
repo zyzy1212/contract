@@ -327,8 +327,6 @@ def _child_parts(text: str, max_chars: int) -> Iterator[str]:
         protected_end = leading_whitespace + len(article_number)
         while protected_end < len(text) and text[protected_end].isspace():
             protected_end += 1
-        if protected_end < len(text):
-            protected_end += 1
     protected = text[:protected_end]
     raw_parts = iter(_raw_child_parts(text[protected_end:], max_chars))
 
