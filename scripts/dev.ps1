@@ -38,6 +38,23 @@ function Wait-Docker {
     return (Test-DockerReady)
 }
 
+function Load-EnvFile {
+    $envFile = Join-Path $root ".env"
+    if (-not (Test-Path $envFile)) { return }
+    Get-Content $envFile | ForEach-Object {
+        if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') {
+            $name = $Matches[1]
+            $value = $Matches[2].Trim()
+            if ($value.Length -ge 2 -and $value[0] -eq '"' -and $value[-1] -eq '"') {
+                $value = $value.Substring(1, $value.Length - 2)
+            }
+            if (-not [Environment]::GetEnvironmentVariable($name)) {
+                Set-Item -Path "Env:$name" -Value $value
+            }
+        }
+    }
+}
+
 function Start-AppProcess {
     param(
         [string]$Name,
@@ -53,6 +70,7 @@ function Start-AppProcess {
 }
 
 function Start-Dev {
+    Load-EnvFile
     if (-not (Test-Path $python)) {
         Write-Host "ERROR: backend venv not found. Run setup first."
         exit 1

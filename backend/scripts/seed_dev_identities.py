@@ -26,7 +26,8 @@ IDENTITIES = (
 
 
 async def seed() -> None:
-    async with async_session_factory() as session, session.begin():
+    factory = async_session_factory()
+    async with factory() as session, session.begin():
         for item in IDENTITIES:
             await session.execute(
                 text(
