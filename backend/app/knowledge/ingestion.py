@@ -47,6 +47,32 @@ def tokenize_keyword_text(value: str) -> str:
     return " ".join(tokens)
 
 
+def domain_keyword_search_text(
+    content: str,
+    *,
+    article_number: str | None,
+    section_title: str | None,
+    source: KnowledgeSource,
+) -> str:
+    """Index legal metadata together with content for domain-aware keyword recall."""
+    metadata = " ".join(
+        part
+        for part in (
+            source.title,
+            source.issuing_authority,
+            source.document_number,
+            section_title or "",
+        )
+        if part
+    )
+    raw = f"{metadata} {content}" if metadata else content
+    tokens = tokenize_keyword_text(raw)
+    normalized_article = re.sub(r"\s+", "", article_number or "").lower()
+    if normalized_article:
+        tokens = f"{tokens} {normalized_article}"
+    return tokens
+
+
 class DocumentParser(Protocol):
     def __call__(self, path: Path) -> ParsedDocument: ...
 
@@ -442,7 +468,12 @@ def build_chunk_plan(
             paragraph_index=snapshot["paragraph_index"],
             bboxes=bboxes,
             source_snapshot=snapshot,
-            keyword_search_text=tokenize_keyword_text(parent_text),
+            keyword_search_text=domain_keyword_search_text(
+                parent_text,
+                article_number=snapshot["article_number"],
+                section_title=snapshot["section_title"],
+                source=source,
+            ),
         )
         parents.append(parent)
         ordinal += 1
@@ -494,7 +525,12 @@ def build_chunk_plan(
                     paragraph_index=child_snapshot["paragraph_index"],
                     bboxes=tuple(dict(bbox) for bbox in child_snapshot["bboxes"]),
                     source_snapshot=child_snapshot,
-                    keyword_search_text=tokenize_keyword_text(child_text),
+                    keyword_search_text=domain_keyword_search_text(
+                        child_text,
+                        article_number=child_snapshot["article_number"],
+                        section_title=child_snapshot["section_title"],
+                        source=source,
+                    ),
                 )
             )
             ordinal += 1

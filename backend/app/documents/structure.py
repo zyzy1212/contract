@@ -3,6 +3,7 @@ import re
 
 _LEGAL_NUMBER = r"(?:\d+|[〇零一二三四五六七八九十百千万两]+)"
 _ARTICLE_RE = re.compile(rf"^(第{_LEGAL_NUMBER}条(?:之{_LEGAL_NUMBER})?)")
+_ARTICLE_REFERENCE_RE = re.compile(rf"第{_LEGAL_NUMBER}条(?:之{_LEGAL_NUMBER})?")
 _SECTION_RE = re.compile(
     rf"^第{_LEGAL_NUMBER}(?:分)?([编篇部章节])(.*)$"
 )
@@ -33,6 +34,17 @@ _TOC_ENTRY_RE = re.compile(
 def extract_article_number(text: str) -> str | None:
     match = _ARTICLE_RE.match(text.strip())
     return match.group(1) if match else None
+
+
+def article_number_references(text: str) -> list[str]:
+    """Return distinct article-number references found anywhere in text."""
+    normalized = re.sub(r"\s+", "", text or "")
+    seen: list[str] = []
+    for match in _ARTICLE_REFERENCE_RE.finditer(normalized):
+        value = match.group(0)
+        if value not in seen:
+            seen.append(value)
+    return seen
 
 
 def section_heading_level(text: str) -> int | None:

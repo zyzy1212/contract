@@ -37,6 +37,22 @@ function authHeaders(): Record<string, string> {
 }
 
 
+async function readErrorDetail(
+  response: Response,
+  fallback: string,
+): Promise<string> {
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    if (typeof body.detail === "string" && body.detail) {
+      return body.detail;
+    }
+  } catch {
+    // The fallback still carries the HTTP status when the body is not JSON.
+  }
+  return fallback;
+}
+
+
 export async function getReview(jobId: string): Promise<ReviewDetail> {
   const response = await fetch(`/api/reviews/${encodeURIComponent(jobId)}`, {
     headers: { Accept: "application/json", ...authHeaders() },
@@ -80,7 +96,10 @@ export async function retryReview(jobId: string): Promise<{ id: string }> {
     { method: "POST", headers: authHeaders() },
   );
   if (!response.ok) {
-    throw new Error(`review retry failed: ${response.status}`);
+    throw new ApiError(
+      await readErrorDetail(response, `review retry failed: ${response.status}`),
+      response.status,
+    );
   }
   return (await response.json()) as { id: string };
 }
@@ -91,7 +110,10 @@ export async function rerunReview(jobId: string): Promise<{ id: string }> {
     { method: "POST", headers: authHeaders() },
   );
   if (!response.ok) {
-    throw new Error(`review rerun failed: ${response.status}`);
+    throw new ApiError(
+      await readErrorDetail(response, `review rerun failed: ${response.status}`),
+      response.status,
+    );
   }
   return (await response.json()) as { id: string };
 }

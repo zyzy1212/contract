@@ -10,6 +10,7 @@ from uuid import UUID
 
 from app.auth import Actor, require_tenant
 from app.common.errors import InputValidationError
+from app.documents.structure import article_number_references
 from app.knowledge.ingestion import tokenize_keyword_text
 
 from .models import (
@@ -55,6 +56,7 @@ class HybridCandidateRepository(Protocol):
         embedding_dimension: int,
         timeout_ms: int,
         as_of: date,
+        article_numbers: Sequence[str] = (),
     ) -> RetrievalChannels: ...
 
 
@@ -178,9 +180,9 @@ class HybridRetriever:
         if (
             isinstance(timeout_ms, bool)
             or not isinstance(timeout_ms, int)
-            or not 1 <= timeout_ms <= 10_000
+            or not 1 <= timeout_ms <= 60_000
         ):
-            raise ValueError("timeout_ms must be between 1 and 10000")
+            raise ValueError("timeout_ms must be between 1 and 60000")
         default_stage_timeout = max(1, timeout_ms // 5)
         stage_timeouts = {
             "embedding_timeout_ms": (
@@ -203,9 +205,9 @@ class HybridRetriever:
             if (
                 isinstance(value, bool)
                 or not isinstance(value, int)
-                or not 1 <= value <= 10_000
+                or not 1 <= value <= 30_000
             ):
-                raise ValueError(f"{name} must be between 1 and 10000")
+                raise ValueError(f"{name} must be between 1 and 30000")
         required_budget = (
             stage_timeouts["embedding_timeout_ms"]
             + 2 * stage_timeouts["channel_timeout_ms"]
@@ -332,6 +334,7 @@ class HybridRetriever:
         keyword_search_text = await asyncio.to_thread(
             tokenize_keyword_text, normalized_query
         )
+        article_numbers = article_number_references(normalized_query)
         channels = await self.repository.retrieve_hybrid_candidates(
             actor,
             query_embedding=embedding,
@@ -342,10 +345,11 @@ class HybridRetriever:
             limit=self.channel_candidate_pool,
             timeout_ms=self.channel_timeout_ms,
             as_of=as_of,
+            article_numbers=article_numbers,
         )
         if not isinstance(channels, RetrievalChannels):
             raise InputValidationError("repository returned invalid retrieval channels")
-        for candidate_list in (channels.vector, channels.keyword):
+        for candidate_list in (channels.vector, channels.keyword, channels.reference):
             if any(not isinstance(item, EvidenceCandidate) for item in candidate_list):
                 raise InputValidationError("repository returned invalid evidence records")
             if any(
@@ -364,23 +368,23 @@ class HybridRetriever:
             }.values()
         )
         failed_names = {failure.channel for failure in failures}
-        if failed_names - {"vector", "keyword"}:
+        if failed_names - {"vector", "keyword", "reference"}:
             raise InputValidationError("repository returned an unknown retrieval channel")
-        if failed_names == {"vector", "keyword"}:
+        if failed_names == {"vector", "keyword", "reference"}:
             raise TransientRetrievalError("all retrieval channels failed")
         if ("vector" in failed_names and channels.vector) or (
             "keyword" in failed_names and channels.keyword
-        ):
+        ) or ("reference" in failed_names and channels.reference):
             raise InputValidationError("failed retrieval channel returned candidates")
 
         fusion_limit = (
-            min(MAX_RRF_TOP_K, self.channel_candidate_pool * 2)
+            min(MAX_RRF_TOP_K, self.channel_candidate_pool * 3)
             if self.reranker is not None
             else self.top_k
         )
         fused = reciprocal_rank_fusion(
-            [channels.vector, channels.keyword],
-            channel_names=("vector", "keyword"),
+            [channels.vector, channels.keyword, channels.reference],
+            channel_names=("vector", "keyword", "reference"),
             rrf_k=self.rrf_k,
             top_k=fusion_limit,
         )
@@ -410,6 +414,7 @@ class HybridRetriever:
             channels=(
                 self._channel_trace("vector", channels.vector),
                 self._channel_trace("keyword", channels.keyword),
+                self._channel_trace("reference", channels.reference),
             ),
             failures=failures,
             embedding_model=self.embedder.model_name,

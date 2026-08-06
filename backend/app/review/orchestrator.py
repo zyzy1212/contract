@@ -193,6 +193,19 @@ def _validate_judge_evidence(
         raise ValueError(f"judge selected unknown evidence ids: {unknown}")
 
 
+def _passes_evidence_similarity(
+    candidate: EvidenceCandidate,
+    min_similarity: float,
+) -> bool:
+    """Keep semantically relevant vector hits above the configured threshold."""
+    if min_similarity <= 0:
+        return True
+    vector_score = candidate.channel_scores.get("vector")
+    if vector_score is None:
+        return True
+    return vector_score >= min_similarity
+
+
 async def collect_sufficient_evidence(
     actor: Actor,
     initial_query: str,
@@ -200,6 +213,7 @@ async def collect_sufficient_evidence(
     judge: EvidenceJudge,
     max_rounds: int = 3,
     query_expander: QueryExpander | None = None,
+    min_similarity: float = 0.0,
 ) -> EvidenceCollection:
     if max_rounds < 1:
         raise ValueError("max_rounds must be positive")
@@ -236,7 +250,11 @@ async def collect_sufficient_evidence(
             for item in candidates:
                 if item.chunk_id not in seen and item.chunk_id not in merged:
                     merged[item.chunk_id] = item
-        candidates = list(merged.values())[:MAX_EXPANDED_CANDIDATES]
+        candidates = [
+            item
+            for item in merged.values()
+            if _passes_evidence_similarity(item, min_similarity)
+        ][:MAX_EXPANDED_CANDIDATES]
         candidate_ids = [item.chunk_id for item in candidates]
         seen_candidates.extend(candidates)
         seen.update(candidate_ids)

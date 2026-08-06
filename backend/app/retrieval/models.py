@@ -110,6 +110,7 @@ class RetrievalChannelFailure:
 class RetrievalChannels:
     vector: tuple[EvidenceCandidate, ...] = ()
     keyword: tuple[EvidenceCandidate, ...] = ()
+    reference: tuple[EvidenceCandidate, ...] = ()
     failures: tuple[RetrievalChannelFailure, ...] = ()
 
 

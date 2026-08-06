@@ -76,6 +76,21 @@ npm run dev
 - 短于 `REVIEW_QUERY_EXPANSION_MIN_CHARACTERS` 的条款跳过扩写，减少无效检索调用。
 - `REVIEW_RETRIEVAL_MAX_ROUNDS` 控制证据追问轮数上限，调小可加快审核但会降低召回上限。
 
+## 检索通道与精排
+
+- 混合检索包含三个通道：向量召回、关键词召回、法条引用召回；法条引用通道按
+  `article_number`、法规名称、章节标题匹配，每个通道各自召回前 20 条。
+- 三通道结果经 RRF 融合后交给 Cross-Encoder 精排，最终只保留前 5 条作为
+  证据候选（`REVIEW_RETRIEVAL_CHANNEL_TOP_K=20`、`REVIEW_RERANK_TOP_K=5`）。
+- 向量召回片段需满足 `REVIEW_EVIDENCE_MIN_SIMILARITY`（默认 0.5）才进入证据
+  判断和大模型生成；法条精确命中不受相似度门槛限制。
+- 知识库关键词索引包含法规标题、发布机关、文号、章节与法条号（迁移
+  `0007_domain_keyword_index`），新入库知识在分块时自动写入。
+- Cross-Encoder 精排默认启用（`REVIEW_RERANK_ENABLED=true`），默认使用
+  `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`；中文场景可切换为
+  `BAAI/bge-reranker-base` 或 `maidalun1020/bce-reranker-base_v1`，并确认机器
+  内存足够。模型会在任务开始时预热，避免首次推理占用检索超时预算。
+
 ## DeepSeek 多 Key
 
 - `DEEPSEEK_API_KEY` 支持逗号分隔多个 key，例如 `sk-a, sk-b`。
@@ -86,7 +101,14 @@ npm run dev
 ## 卡住任务恢复
 
 - 每个条款有独立 checkpoint；Celery 任务从 `review_clause_checkpoints` 中恢复未完成条款。
-- 若任务卡在 `running` 超过阈值，先检查 worker 存活，再通过管理命令重投递任务。
+- 若任务卡在 `running` 超过阈值，先检查 worker 存活，再从 `backend` 目录重投递：
+
+  ```powershell
+  uv run --locked --extra dev python scripts/resume_review_jobs.py --minutes 15
+  ```
+
+  该命令会把超过 15 分钟未更新的 `running` 任务重新放入 review 队列，从已有
+  `review_clause_checkpoints` 继续审核未完成条款。
 - 单条款失败不会终止整份合同，最终状态为 `partial` 并列出未审核条款。
 
 ## 模型故障行为

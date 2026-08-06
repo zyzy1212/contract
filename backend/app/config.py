@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     review_query_expansion_max_queries: int = Field(default=3, ge=1, le=8)
     review_query_expansion_min_characters: int = Field(default=30, ge=1, le=2048)
     review_retrieval_max_rounds: int = Field(default=3, ge=1, le=5)
+    review_rerank_enabled: bool = True
+    review_rerank_model: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+    review_rerank_top_k: int = Field(default=5, ge=1, le=100)
+    review_retrieval_channel_top_k: int = Field(default=20, ge=1, le=200)
+    review_evidence_min_similarity: float = Field(default=0.5, ge=0, le=1)
     model_config = SettingsConfigDict(env_file=REPOSITORY_ROOT / ".env", extra="ignore")
 
 

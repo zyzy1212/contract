@@ -10,8 +10,6 @@ import PdfSourceViewer from "./PdfSourceViewer.vue";
 const props = defineProps<{
   clauses: SourceClause[];
   highlightedClauseId: string;
-  flaggedClauseIds?: string[];
-  insufficientClauseIds?: string[];
   jobId?: string;
 }>();
 
@@ -22,14 +20,6 @@ const iframeUrl = ref("");
 let iframeBlobUrl = "";
 const docxContainer = ref<HTMLDivElement | null>(null);
 const sourceScroll = ref<HTMLElement | null>(null);
-
-function isFlagged(clause: SourceClause): boolean {
-  return (props.flaggedClauseIds ?? []).includes(clause.id);
-}
-
-function isInsufficient(clause: SourceClause): boolean {
-  return (props.insufficientClauseIds ?? []).includes(clause.id);
-}
 
 function isPdfClause(clause: SourceClause): boolean {
   return clause.page_start != null && clause.bboxes.length > 0;
@@ -176,8 +166,6 @@ onUnmounted(revokeFileUrl);
         :key="clause.id"
         class="clause"
         :class="{
-          'has-finding': isFlagged(clause),
-          'is-insufficient': isInsufficient(clause),
           'is-highlighted': clause.id === highlightedClauseId,
         }"
         :data-clause-id="clause.id"
@@ -191,9 +179,6 @@ onUnmounted(revokeFileUrl);
           </span>
           <span v-if="clause.paragraph_index != null" class="clause-paragraph">
             第 {{ clause.paragraph_index }} 段
-          </span>
-          <span v-if="isInsufficient(clause)" class="clause-insufficient">
-            依据不足
           </span>
         </header>
         <PdfSourceViewer
@@ -325,17 +310,6 @@ onUnmounted(revokeFileUrl);
   transition: border-color 140ms ease, background-color 140ms ease;
 }
 
-.clause.has-finding {
-  border-color: #fcd34d;
-  background: #fffbeb;
-}
-
-.clause.is-insufficient {
-  border-color: #f59e0b;
-  border-style: dashed;
-  background: #fffbeb;
-}
-
 .clause.is-highlighted {
   border-color: #0ea5e9;
   background: #f0f9ff;
@@ -359,8 +333,4 @@ onUnmounted(revokeFileUrl);
   color: #64748b;
 }
 
-.clause-insufficient {
-  color: #92400e;
-  font-weight: 700;
-}
 </style>

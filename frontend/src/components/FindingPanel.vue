@@ -6,6 +6,7 @@ defineProps<{
   findings: Finding[];
   selectedFindingId: string;
   clauseLabels?: Record<string, string>;
+  clauseTexts?: Record<string, string>;
   emptyReason?: string;
 }>();
 
@@ -45,6 +46,13 @@ const riskLabel = (risk: Finding["risk_level"]): string =>
             {{ clauseLabels?.[finding.clause_id] ?? finding.clause_id }}
           </span>
         </div>
+        <p
+          v-if="clauseTexts?.[finding.clause_id]"
+          class="finding-clause"
+          :title="clauseTexts[finding.clause_id]"
+        >
+          对应条款：{{ clauseTexts[finding.clause_id] }}
+        </p>
         <h3 class="finding-problem">{{ finding.problem }}</h3>
         <p class="finding-reason">{{ finding.reason }}</p>
         <p class="finding-suggestion">
@@ -147,6 +155,20 @@ const riskLabel = (risk: Finding["risk_level"]): string =>
   color: #64748b;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
+}
+
+.finding-clause {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-left: 3px solid #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 13px;
+  line-height: 1.6;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 
 .finding-problem {

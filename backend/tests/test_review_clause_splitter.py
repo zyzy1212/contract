@@ -86,6 +86,34 @@ def test_risk_and_impact_section_titles_are_skipped() -> None:
     assert "合同履行存在不可抗力风险。" in texts
 
 
+def test_fund_prospectus_section_headings_are_skipped() -> None:
+    parsed = _document(
+        [
+            _block("一、基金份额的发售时间、发售方式、发售对象", index=0),
+            _block("本基金自2026年8月6日起开始发售。", index=1),
+            _block("二、基金份额的认购", index=2),
+            _block("投资者应当在募集期内认购基金份额。", index=3),
+        ]
+    )
+    clauses = split_contract_clauses(parsed)
+    texts = [clause.text for clause in clauses]
+    assert texts == [
+        "本基金自2026年8月6日起开始发售。",
+        "投资者应当在募集期内认购基金份额。",
+    ]
+
+
+def test_standalone_fund_section_headings_do_not_become_clauses() -> None:
+    parsed = _document(
+        [
+            _block("一、基金份额的发售时间、发售方式、发售对象", index=0),
+            _block("二、基金份额的认购", index=1),
+        ]
+    )
+    clauses = split_contract_clauses(parsed)
+    assert clauses == []
+
+
 def test_closing_footer_blocks_are_skipped() -> None:
     parsed = _document(
         [

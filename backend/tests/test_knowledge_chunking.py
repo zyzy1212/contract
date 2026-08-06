@@ -1,4 +1,5 @@
-from app.knowledge.ingestion import _child_parts
+from app.knowledge.ingestion import _child_parts, domain_keyword_search_text
+from app.knowledge.models import KnowledgeSource
 
 
 def test_article_header_keeps_full_body_start() -> None:
@@ -42,3 +43,19 @@ def test_multiline_chunks_do_not_start_mid_word() -> None:
     assert children[0].startswith("第八百六十条　合作")
     assert all(not child.startswith("作开发") for child in children)
     assert all(not child.startswith("事人一方") for child in children)
+
+
+def test_domain_keyword_text_indexes_article_number_and_title() -> None:
+    source = KnowledgeSource(
+        title="中华人民共和国民法典",
+        source_type="tenant_private",
+    )
+    tokens = domain_keyword_search_text(
+        "依法成立的合同自成立时生效",
+        article_number="第五百零二条",
+        section_title="合同的效力",
+        source=source,
+    )
+    assert "第五百零二条" in tokens.split()
+    assert "民法典" in tokens.split()
+    assert "生效" in tokens.split()

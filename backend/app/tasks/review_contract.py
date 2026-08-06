@@ -50,7 +50,11 @@ _SECTION_TITLE_SUFFIX_RE = re.compile(
     r"(?:"
     r"基本情况|主要内容|概述|简介|介绍|情况|内容|背景|意义|目的|依据|"
     r"范围|定义|原则|要求|安排|措施|方式|程序|条件|标准|约定|事项|"
-    r"风险|提示|影响|其他|附则|附件|文件"
+    r"风险|提示|影响|其他|附则|附件|文件|"
+    r"发售时间|发售方式|发售对象|违约责任|争议解决|"
+    r"对象|认购|申购|赎回|登记|发售|时间|地点|期限|当事人|份额|"
+    r"费用|税收|收益|分配|支付|交付|验收|保密|披露|清算|变更|"
+    r"终止|生效|转让|通知|效力|文本"
     r")$"
 )
 
@@ -659,6 +663,9 @@ async def run_review_job(
     clause_splitter = clause_splitter or split_contract_clauses
     clause_reviewer = clause_reviewer or build_default_clause_reviewer()
     contract_parser = contract_parser or _parse_contract
+    warm = getattr(clause_reviewer, "warm", None)
+    if warm is not None:
+        await warm()
     actor = Actor(user_id="system", tenant_id=tenant_id, role="admin")
     await SentenceTransformerQueryEmbedder().warm()
     job = await repository.load_job(actor, job_id)
@@ -780,6 +787,7 @@ class ClauseReviewerPipeline:
         reviewer,
         query_expander=None,
         retrieval_max_rounds: int = 3,
+        min_evidence_similarity: float | None = None,
     ) -> None:
         self._retriever = retriever
         self._judge = judge
@@ -787,6 +795,17 @@ class ClauseReviewerPipeline:
         self._reviewer = reviewer
         self._query_expander = query_expander
         self._retrieval_max_rounds = retrieval_max_rounds
+        self._min_evidence_similarity = (
+            min_evidence_similarity
+            if min_evidence_similarity is not None
+            else get_settings().review_evidence_min_similarity
+        )
+    async def warm(self) -> None:
+        """Load inference models before the bounded retrieval timeout budget."""
+        reranker = getattr(self._retriever, "reranker", None)
+        warm = getattr(reranker, "warm", None)
+        if warm is not None:
+            await asyncio.to_thread(warm)
 
     async def review_clause(
         self,
@@ -805,6 +824,7 @@ class ClauseReviewerPipeline:
             self._judge,
             query_expander=self._query_expander,
             max_rounds=self._retrieval_max_rounds,
+            min_similarity=self._min_evidence_similarity,
         )
         if collection.status != "sufficient":
             return ClauseReviewResult(status="insufficient")
@@ -815,11 +835,14 @@ class ClauseReviewerPipeline:
             self._reviewer,
         )
         if final.status == "complete":
-            return ClauseReviewResult(
+            result = ClauseReviewResult(
                 status="complete",
                 findings=final.findings,
                 evidence=list(collection.candidates),
             )
+            if final.findings:
+                return result
+            return result
         if final.status == "needs_retrieval":
             return ClauseReviewResult(status="needs_retrieval")
         return ClauseReviewResult(
@@ -836,10 +859,11 @@ def build_default_clause_reviewer() -> ClauseReviewer:
     from app.review.query_expansion import DeepSeekQueryExpander
     from app.review.reviewer import DeepSeekResultReviewer
     from app.retrieval.hybrid import HybridRetriever
+    from app.retrieval.reranker import CrossEncoderReranker
 
     settings = get_settings()
     client = DeepSeekClient(settings)
-    query_expander = (
+    llm_query_expander = (
         DeepSeekQueryExpander(
             client,
             max_queries=settings.review_query_expansion_max_queries,
@@ -848,11 +872,23 @@ def build_default_clause_reviewer() -> ClauseReviewer:
         if settings.review_query_expansion_enabled
         else None
     )
+    query_expander = llm_query_expander
     repository = KnowledgeRepository(transaction_factory=tenant_transaction)
+    reranker = (
+        CrossEncoderReranker(settings.review_rerank_model)
+        if settings.review_rerank_enabled
+        else None
+    )
     retriever = HybridRetriever(
         repository=repository,
         embedder=SentenceTransformerQueryEmbedder(),
-        top_k=20,
+        reranker=reranker,
+        channel_candidate_pool=settings.review_retrieval_channel_top_k,
+        top_k=settings.review_rerank_top_k,
+        timeout_ms=40_000,
+        embedding_timeout_ms=2_000,
+        channel_timeout_ms=3_000,
+        rerank_timeout_ms=30_000,
     )
     return ClauseReviewerPipeline(
         retriever,
@@ -868,6 +904,34 @@ async def enqueue_review_task(job_id: str, tenant_id: str) -> None:
     review_contract_task.delay(job_id, tenant_id)
 
 
+async def mark_job_failed(
+    job_id: str,
+    tenant_id: str,
+    failure_reason: str,
+    *,
+    transaction_factory=tenant_transaction,
+) -> None:
+    """Persist a terminal failed state when Celery retries are exhausted."""
+    actor = Actor(user_id="system", tenant_id=tenant_id, role="admin")
+    async with transaction_factory(actor) as session:
+        await session.execute(
+            text(
+                """
+                UPDATE review_jobs
+                SET status = 'failed',
+                    failure_reason = :failure_reason,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :job_id
+                  AND status NOT IN ('complete', 'partial', 'failed')
+                """
+            ),
+            {
+                "job_id": job_id,
+                "failure_reason": failure_reason,
+            },
+        )
+
+
 @celery_app.task(
     name="contract_review.review_contract",
     bind=True,
@@ -877,4 +941,12 @@ def review_contract_task(self, job_id: str, tenant_id: str) -> None:
     try:
         asyncio.run(run_review_job(job_id, tenant_id))
     except Exception as exc:
+        if self.request.retries >= self.max_retries:
+            try:
+                asyncio.run(
+                    mark_job_failed(job_id, tenant_id, str(exc))
+                )
+            except Exception:
+                pass
+            raise
         raise self.retry(exc=exc, countdown=2 ** self.request.retries)

@@ -610,19 +610,27 @@ class ContractService:
         result = await session.execute(
             text(
                 """
-                SELECT id::text AS id,
-                       clause_id,
-                       risk_level::text AS risk_level,
-                       problem,
-                       reason,
-                       suggestion,
-                       proposed_clause
-                FROM review_findings
-                WHERE job_id = :job_id AND status = 'passed'
+                SELECT finding.id::text AS id,
+                       finding.clause_id,
+                       finding.risk_level::text AS risk_level,
+                       finding.problem,
+                       finding.reason,
+                       finding.suggestion,
+                       finding.proposed_clause
+                FROM review_findings finding
+                JOIN review_clause_checkpoints clause
+                  ON clause.job_id = finding.job_id
+                 AND clause.clause_id = finding.clause_id
+                WHERE finding.job_id = :job_id
+                  AND finding.status = 'passed'
                 ORDER BY
-                    created_at,
-                    CAST(regexp_replace(clause_id, '[^0-9]', '', 'g') AS integer),
-                    clause_id
+                    finding.created_at,
+                    CAST(
+                        regexp_replace(
+                            finding.clause_id, '[^0-9]', '', 'g'
+                        ) AS integer
+                    ),
+                    finding.clause_id
                 """
             ),
             {"job_id": job_id},

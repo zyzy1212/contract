@@ -45,29 +45,11 @@ const uploadError = ref("");
 const uploadState = ref<"idle" | "uploading" | "polling" | "failed">("idle");
 const rerunning = ref(false);
 const selectedFindingId = ref("");
-const activeRisk = ref<"all" | "high" | "medium" | "low" | "insufficient">("all");
+const activeRisk = ref<"all" | "high" | "medium" | "low">("all");
 const fileInput = ref<HTMLInputElement | null>(null);
 
 const selectedFinding = computed<Finding | undefined>(() =>
   review.value?.findings.find((finding) => finding.id === selectedFindingId.value),
-);
-
-const flaggedClauseIds = computed<string[]>(() => {
-  const ids = new Set<string>();
-  for (const finding of review.value?.findings ?? []) {
-    if (finding.clause_id) ids.add(finding.clause_id);
-  }
-  return Array.from(ids);
-});
-
-const insufficientClauseIds = computed<string[]>(() =>
-  (review.value?.source_clauses ?? [])
-    .filter((clause) => clause.status === "insufficient")
-    .map((clause) => clause.id),
-);
-
-const insufficientClauseCount = computed<number>(
-  () => review.value?.insufficient_clause_count ?? 0,
 );
 
 const clauseLabels = computed<Record<string, string>>(() => {
@@ -78,9 +60,16 @@ const clauseLabels = computed<Record<string, string>>(() => {
   return labels;
 });
 
+const clauseTexts = computed<Record<string, string>>(() => {
+  const texts: Record<string, string> = {};
+  for (const clause of review.value?.source_clauses ?? []) {
+    texts[clause.id] = clause.text;
+  }
+  return texts;
+});
+
 const visibleFindings = computed<Finding[]>(() => {
   if (!review.value) return [];
-  if (activeRisk.value === "insufficient") return [];
   if (activeRisk.value === "all") return review.value.findings;
   return review.value.findings.filter(
     (finding) => finding.risk_level === activeRisk.value,
@@ -103,14 +92,11 @@ const statusLabel = computed(() => {
 const findingEmptyReason = computed(() => {
   if (!review.value) return "";
   if (!["complete", "partial", "failed"].includes(review.value.status)) return "";
-  if (activeRisk.value === "insufficient") {
-    return insufficientClauseCount.value > 0
-      ? "依据不足的条款未生成风险发现，见左侧“依据不足”标注。"
-      : "";
+  if (visibleFindings.value.length > 0) return "";
+  if (review.value.findings.length > 0) {
+    return "当前风险筛选下没有匹配的发现。";
   }
-  if (review.value.findings.length > 0) return "";
-  if (insufficientClauseCount.value > 0) return "";
-  return "知识库中未找到足够依据，系统不会发布未经验证的发现。";
+  return "本任务未生成风险发现。";
 });
 
 async function loadHistory() {
@@ -315,7 +301,12 @@ async function handleRerun() {
     void loadHistory();
   } catch (err) {
     uploadState.value = "failed";
-    uploadError.value = err instanceof Error ? err.message : "重新审核失败";
+    if (err instanceof ApiError && err.status === 409) {
+      uploadError.value =
+        "该合同已有进行中的审核任务，请等待当前审核完成后再重新审核。";
+    } else {
+      uploadError.value = err instanceof Error ? err.message : "重新审核失败";
+    }
   } finally {
     rerunning.value = false;
   }
@@ -446,35 +437,21 @@ function selectFinding(finding: Finding) {
                 <option value="high">高</option>
                 <option value="medium">中</option>
                 <option value="low">低</option>
-                <option value="insufficient">依据不足</option>
               </select>
             </label>
-          </div>
-
-          <div
-            v-if="
-              insufficientClauseCount > 0 &&
-              ['complete', 'partial', 'failed'].includes(review.status)
-            "
-            class="notice is-warning"
-            data-insufficient-banner
-          >
-            {{ insufficientClauseCount }}
-            个条款因知识库依据不足未生成风险发现，可补充相关法规后重新审核。
           </div>
 
           <div class="review-grid">
             <ContractSourcePane
               :clauses="review.source_clauses"
               :highlighted-clause-id="selectedFinding?.clause_id ?? ''"
-              :flagged-clause-ids="flaggedClauseIds"
-              :insufficient-clause-ids="insufficientClauseIds"
               :job-id="review.id"
             />
             <FindingPanel
               :findings="visibleFindings"
               :selected-finding-id="selectedFindingId"
               :clause-labels="clauseLabels"
+              :clause-texts="clauseTexts"
               :empty-reason="findingEmptyReason"
               @select-finding="selectFinding"
             />

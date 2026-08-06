@@ -30,35 +30,52 @@ class CrossEncoderModel(Protocol):
 
 
 class RerankerCapacityError(RuntimeError):
-    """The single inference worker is running and admits no additional queue."""
+    """The reranker queue is full or the executor is closed."""
 
 
 class BoundedRerankerExecutor:
-    """One inference worker with one admitted task and no waiting queue.
+    """One inference worker with a bounded waiting queue.
 
     Cancelling an awaiter cannot stop Python/native model code already running.
-    The admitted task therefore retains capacity until it actually exits; callers
-    arriving meanwhile fail fast instead of accumulating work or overlapping it.
+    The admitted task therefore retains capacity until it actually exits; waiting
+    callers stay within the caller's own timeout instead of overlapping it.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_waiters: int = 16) -> None:
+        if (
+            isinstance(max_waiters, bool)
+            or not isinstance(max_waiters, int)
+            or max_waiters < 1
+        ):
+            raise ValueError("max_waiters must be a positive integer")
+        self._max_waiters = max_waiters
         self._admission = BoundedSemaphore(1)
+        self._waiters = BoundedSemaphore(max_waiters)
         self._state_lock = Lock()
         self._closed = False
         self._executor: ThreadPoolExecutor | None = None
 
     async def run(self, function: Callable[..., Any], /, *args: Any, **kwargs: Any) -> Any:
-        if not self._admission.acquire(blocking=False):
-            raise RerankerCapacityError("reranker capacity is busy")
-        with self._state_lock:
-            if self._closed:
+        if not self._waiters.acquire(blocking=False):
+            raise RerankerCapacityError("reranker queue is full")
+        admitted = False
+        try:
+            while not self._admission.acquire(blocking=False):
+                await asyncio.sleep(0.05)
+            admitted = True
+            with self._state_lock:
+                if self._closed:
+                    raise RerankerCapacityError("reranker executor is closed")
+                if self._executor is None:
+                    self._executor = ThreadPoolExecutor(
+                        max_workers=1, thread_name_prefix="contract-reranker"
+                    )
+                executor = self._executor
+        except BaseException:
+            if admitted:
                 self._admission.release()
-                raise RerankerCapacityError("reranker executor is closed")
-            if self._executor is None:
-                self._executor = ThreadPoolExecutor(
-                    max_workers=1, thread_name_prefix="contract-reranker"
-                )
-            executor = self._executor
+            self._waiters.release()
+            raise
 
         call = functools.partial(function, *args, **kwargs)
 
@@ -67,14 +84,16 @@ class BoundedRerankerExecutor:
                 return call()
             finally:
                 self._admission.release()
+                self._waiters.release()
 
         loop = asyncio.get_running_loop()
         try:
             future = loop.run_in_executor(executor, admitted_call)
         except BaseException:
             # ``close`` may win the race after the executor leaves the state
-            # lock but before submission. No worker will release admission then.
+            # lock but before submission. No worker will release capacity then.
             self._admission.release()
+            self._waiters.release()
             raise
         return await asyncio.shield(future)
 
@@ -169,6 +188,11 @@ class CrossEncoderReranker:
             else:
                 self._model = self._loader(self.model_name)
         return self._model
+
+    def warm(self) -> None:
+        """Load the model before the bounded reranking timeout budget starts."""
+        with self._inference_lock:
+            self._load_model()
 
     def rerank(
         self,

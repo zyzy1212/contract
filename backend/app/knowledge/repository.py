@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import math
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextlib import AbstractAsyncContextManager
 from datetime import date
 from typing import Any, cast
@@ -200,6 +200,7 @@ class KnowledgeRepository:
         embedding_dimension: int = 512,
         timeout_ms: int = 2_000,
         as_of: date | None = None,
+        article_numbers: Sequence[str] = (),
     ) -> RetrievalChannels:
         """Run indexed vector and Chinese-aware keyword recall in one tenant transaction.
 
@@ -250,6 +251,17 @@ class KnowledgeRepository:
             raise InputValidationError("excluded chunk IDs must not exceed 1000")
         if any(not isinstance(chunk_id, str) or not chunk_id.strip() for chunk_id in excluded_chunk_ids):
             raise InputValidationError("excluded chunk IDs must not be empty")
+        if len(article_numbers) > 20:
+            raise InputValidationError("article numbers must not exceed 20")
+        if any(
+            not isinstance(value, str) or not value.strip()
+            for value in article_numbers
+        ):
+            raise InputValidationError("article numbers must be non-empty strings")
+        normalized_article_numbers = list(
+            dict.fromkeys(value.strip() for value in article_numbers)
+        )
+        article_number_count = len(normalized_article_numbers)
         try:
             for chunk_id in excluded_chunk_ids:
                 UUID(chunk_id)
@@ -277,6 +289,16 @@ class KnowledgeRepository:
             "limit": limit,
             "as_of": retrieval_date,
         }
+        article_match = (
+            "(:article_number_count > 0 "
+            "AND regexp_replace(chunk.article_number, '\\s', '', 'g') "
+            "= ANY(CAST(:article_numbers AS varchar[])))"
+        )
+        article_parameters = {
+            **shared_parameters,
+            "article_number_count": article_number_count,
+            "article_numbers": normalized_article_numbers,
+        }
         async with self.transaction_factory(
             actor, None, enable_public_knowledge_write=False
         ) as session:
@@ -288,7 +310,7 @@ class KnowledgeRepository:
             vector_result = None
             if query_embedding is not None:
                 vector_parameters = {
-                    **shared_parameters,
+                    **article_parameters,
                     "query_embedding": json.dumps(
                         [float(value) for value in query_embedding]
                     ),
@@ -307,14 +329,25 @@ class KnowledgeRepository:
                                    chunk.content, chunk.content_sha256,
                                    chunk.source_snapshot,
                                    document.content_sha256 AS source_document_sha256,
-                                   1 - (chunk.embedding <=> CAST(:query_embedding AS vector)) AS score
+                                   CASE
+                                       WHEN {article_match} THEN 2.0
+                                       ELSE 1 - (chunk.embedding <=> CAST(:query_embedding AS vector))
+                                   END AS score
                             FROM knowledge_chunks chunk
                             JOIN knowledge_documents document ON document.id = chunk.document_id
                             WHERE {shared_filters}
-                              AND chunk.embedding IS NOT NULL
-                              AND chunk.embedding_model = :embedding_model
-                              AND vector_dims(chunk.embedding) = :embedding_dimension
-                            ORDER BY chunk.embedding <=> CAST(:query_embedding AS vector), chunk.id
+                              AND (
+                                  (
+                                      chunk.embedding IS NOT NULL
+                                      AND chunk.embedding_model = :embedding_model
+                                      AND vector_dims(chunk.embedding) = :embedding_dimension
+                                  )
+                                  OR {article_match}
+                              )
+                            ORDER BY
+                                CASE WHEN {article_match} THEN 0 ELSE 1 END,
+                                chunk.embedding <=> CAST(:query_embedding AS vector),
+                                chunk.id
                             LIMIT :limit
                             """
                         ),
@@ -337,19 +370,25 @@ class KnowledgeRepository:
                            chunk.content, chunk.content_sha256,
                            chunk.source_snapshot,
                            document.content_sha256 AS source_document_sha256,
-                           ts_rank_cd(
-                               chunk.keyword_tsv,
-                               to_tsquery('simple', :keyword_tsquery)
-                           ) AS score
+                           CASE
+                               WHEN {article_match} THEN 2.0
+                               ELSE ts_rank_cd(
+                                   chunk.keyword_tsv,
+                                   to_tsquery('simple', :keyword_tsquery)
+                               )
+                           END AS score
                     FROM knowledge_chunks chunk
                     JOIN knowledge_documents document ON document.id = chunk.document_id
                     WHERE {shared_filters}
-                      AND chunk.keyword_tsv @@ to_tsquery('simple', :keyword_tsquery)
+                      AND (
+                          chunk.keyword_tsv @@ to_tsquery('simple', :keyword_tsquery)
+                          OR {article_match}
+                      )
                     ORDER BY score DESC, chunk.id
                     LIMIT :limit
                     """
                     ),
-                    shared_parameters,
+                    article_parameters,
                     "keyword",
                 )
             except TransientRetrievalError as exc:
@@ -357,6 +396,59 @@ class KnowledgeRepository:
                     raise
                 keyword_result = None
                 failures.append(RetrievalChannelFailure("keyword"))
+            reference_terms = [
+                term
+                for term in _keyword_search_terms(keyword_search_text)
+                if len(term) >= 2
+            ][:20]
+            title_patterns = [f"%{term}%" for term in reference_terms]
+            reference_parameters = {
+                **article_parameters,
+                "title_patterns": title_patterns,
+            }
+            reference_match = (
+                f"({article_match} "
+                "OR document.title ILIKE ANY(CAST(:title_patterns AS text[])) "
+                "OR chunk.section_title ILIKE ANY(CAST(:title_patterns AS text[])))"
+            )
+            try:
+                reference_result = await _execute_retrieval_query(
+                    session,
+                    text(
+                        f"""
+                        SELECT chunk.id::text AS id,
+                               chunk.document_id::text AS document_id,
+                               chunk.scope::text AS knowledge_scope,
+                               chunk.tenant_id::text AS tenant_id,
+                               chunk.content, chunk.content_sha256,
+                               chunk.source_snapshot,
+                               document.content_sha256 AS source_document_sha256,
+                               CASE
+                                   WHEN {article_match} THEN 2.0
+                                   WHEN document.title ILIKE ANY(
+                                       CAST(:title_patterns AS text[])
+                                   )
+                                   OR chunk.section_title ILIKE ANY(
+                                       CAST(:title_patterns AS text[])
+                                   ) THEN 1.0
+                                   ELSE 0.0
+                               END AS score
+                        FROM knowledge_chunks chunk
+                        JOIN knowledge_documents document ON document.id = chunk.document_id
+                        WHERE {shared_filters}
+                          AND {reference_match}
+                        ORDER BY score DESC, chunk.id
+                        LIMIT :limit
+                        """
+                    ),
+                    reference_parameters,
+                    "reference",
+                )
+            except TransientRetrievalError as exc:
+                if exc.channel != "reference":
+                    raise
+                reference_result = None
+                failures.append(RetrievalChannelFailure("reference"))
         return RetrievalChannels(
             vector=tuple(
                 self._retrieval_candidate(
@@ -373,6 +465,17 @@ class KnowledgeRepository:
                 )
                 for rank, row in enumerate(
                     keyword_result.mappings().all() if keyword_result is not None else (),
+                    start=1,
+                )
+            ),
+            reference=tuple(
+                self._retrieval_candidate(
+                    row, "reference", rank, tenant_id, retrieval_date
+                )
+                for rank, row in enumerate(
+                    reference_result.mappings().all()
+                    if reference_result is not None
+                    else (),
                     start=1,
                 )
             ),
