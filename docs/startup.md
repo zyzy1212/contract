@@ -119,7 +119,22 @@ npm install
 cd ..
 ```
 
-### 4. 一键启动
+### 4. 首次初始化数据库（只需要执行一次）
+
+`scripts/dev.ps1` 不会自动创建开发身份，新环境需要在首次启动前执行：
+
+```powershell
+docker compose up -d postgres
+cd backend
+uv run --locked --extra dev alembic upgrade head
+uv run --locked --extra dev python scripts/seed_dev_identities.py
+cd ..
+```
+
+`seed_dev_identities.py` 会写入开发环境身份，本地开发通过请求头模拟用户：
+`X-Actor-User`、`X-Actor-Tenant`、`X-Actor-Role`。
+
+### 5. 一键启动
 
 ```powershell
 .\scripts\dev.ps1 start
@@ -134,13 +149,16 @@ cd ..
 5. 执行数据库迁移 `alembic upgrade head`
 6. 启动后端 API、知识入库 worker、合同审核 worker、前端
 
+`dev.ps1` 只负责启动和迁移，不会安装 Python/Node 依赖，也不会执行身份 seed。
+新环境首次启动前必须先完成第 2、3、4 步。
+
 启动成功后访问：
 
 - 前端：http://localhost:5173
 - 健康检查：http://localhost:8000/health
 - API 文档：http://localhost:8000/docs
 
-### 5. 常用管理命令
+### 6. 常用管理命令
 
 ```powershell
 .\scripts\dev.ps1 stop      # 停止后端、worker、前端和数据库容器
@@ -267,7 +285,18 @@ uv sync --locked --extra dev
 
 ### 前端没有启动
 
-`scripts/dev.ps1` 中写死了当前机器的 Node 路径 `C:\nvm4w\nodejs\node.exe`（第 97 行）。新电脑 Node 装在其他位置时需要修改该行，或不用脚本、手动执行 `cd frontend; npm run dev`。
+先确认已经安装前端依赖：
+
+```powershell
+cd frontend
+npm install
+```
+
+新环境如果没有 `frontend\node_modules`，脚本会输出 `WARNING: vite not found; skip frontend`。
+安装依赖后重新执行 `.\scripts\dev.ps1 start`，或单独执行 `npm run dev`。
+
+另外，`scripts/dev.ps1` 中写死了当前机器的 Node 路径 `C:\nvm4w\nodejs\node.exe`（第 97 行）。
+新电脑 Node 装在其他位置时需要修改该行，或不用脚本、手动执行 `cd frontend; npm run dev`。
 
 ### Docker Desktop 未运行
 

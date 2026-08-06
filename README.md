@@ -1,8 +1,11 @@
 # Contract Review Agent
 
-多租户合同审核系统：FastAPI + PostgreSQL/pgvector 后端，Vue 双栏审核前端，Celery 异步任务，A2A Agent 接口。所有确定性审核结论都绑定可追溯证据，证据不足或复审不通过时不发布草稿。
+多租户合同审核系统：FastAPI + PostgreSQL/pgvector 后端，Vue 双栏审核前端，Celery 异步任务，A2A Agent 接口。所有发布的审核结论都绑定可追溯证据，证据不足或复审不通过时不发布草稿。
 
 ## 一键启动
+
+新环境首次使用请先按 [启动指南](docs/startup.md) 完成 `.env`、后端依赖、数据库迁移、
+身份 seed 和前端依赖安装；之后日常启动统一使用下面的脚本。
 
 ```powershell
 .\scripts\dev.ps1 start
